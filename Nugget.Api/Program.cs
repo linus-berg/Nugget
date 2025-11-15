@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Nugget.Services;
 
 namespace Nugget.Api;
@@ -9,7 +10,8 @@ public class Program {
     // Add services to the container.
     builder.Services.AddAuthorization();
     builder.Services.AddHttpContextAccessor();
-    builder.Services.AddSingleton<PackageStorageService>();
+    builder.Services.AddDbContext<PackageDbContext>(options => options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    builder.Services.AddScoped<PackageStorageService>();
 
     // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
     builder.Services.AddOpenApi();
@@ -24,49 +26,6 @@ public class Program {
     app.UseHttpsRedirection();
 
     app.UseAuthorization();
-
-    string[] summaries = new[] {
-      "Freezing",
-      "Bracing",
-      "Chilly",
-      "Cool",
-      "Mild",
-      "Warm",
-      "Balmy",
-      "Hot",
-      "Sweltering",
-      "Scorching"
-    };
-
-    app.MapGet(
-         "/weatherforecast",
-         (HttpContext http_context) => {
-           WeatherForecast[] forecast = Enumerable.Range(1, 5)
-                                                  .Select(
-                                                    index =>
-                                                      new WeatherForecast {
-                                                        date = DateOnly
-                                                          .FromDateTime(
-                                                            DateTime.Now
-                                                              .AddDays(index)
-                                                          ),
-                                                        temperature_c =
-                                                          Random.Shared.Next(
-                                                            -20,
-                                                            55
-                                                          ),
-                                                        summary =
-                                                          summaries[
-                                                            Random.Shared.Next(
-                                                              summaries.Length
-                                                            )]
-                                                      }
-                                                  )
-                                                  .ToArray();
-           return forecast;
-         }
-       )
-       .WithName("GetWeatherForecast");
     app.MapControllers();
     app.Run();
   }

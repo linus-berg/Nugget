@@ -23,9 +23,9 @@ public class NugetController : Controller {
   }
 
   [HttpGet("/v3/registration/{id}/index.json")]
-  public IResult GetRegistration(string id) {
+  public async Task<IResult> GetRegistration(string id) {
     RegistrationIndexResponse? registration =
-      package_storage_service_.GetRegistration(id, HttpContext);
+      await package_storage_service_.GetRegistrationAsync(id, HttpContext);
     if (registration == null) {
       return Results.NotFound();
     }
