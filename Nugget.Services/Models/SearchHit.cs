@@ -2,16 +2,19 @@ using System.Text.Json.Serialization;
 
 namespace Nugget.Services.Models;
 
-public class SearchHit
-{
+public class SearchHit {
   [JsonPropertyName("id")]
-  public string Id { get; set; } = "";
+  public string id { get; set; } = "";
+
   [JsonPropertyName("version")]
-  public string Version { get; set; } = "";
+  public string version { get; set; } = "";
+
   [JsonPropertyName("description")]
-  public string Description { get; set; } = "";
+  public string description { get; set; } = "";
+
   [JsonPropertyName("authors")]
-  public string[] Authors { get; set; } = Array.Empty<string>();
+  public string[] authors { get; set; } = Array.Empty<string>();
+
   [JsonPropertyName("versions")]
-  public List<SearchVersion> Versions { get; set; } = new();
+  public List<SearchVersion> versions { get; set; } = new();
 }

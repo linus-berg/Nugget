@@ -2,10 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace Nugget.Services.Models;
 
-public class SearchResponse
-{
+public class SearchResponse {
   [JsonPropertyName("totalHits")]
-  public int TotalHits { get; set; }
+  public int total_hits { get; set; }
+
   [JsonPropertyName("data")]
-  public List<SearchHit> Data { get; set; } = new();
+  public List<SearchHit> data { get; set; } = new();
 }

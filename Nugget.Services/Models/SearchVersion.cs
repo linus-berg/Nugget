@@ -2,10 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace Nugget.Services.Models;
 
-public class SearchVersion
-{
+public class SearchVersion {
   [JsonPropertyName("version")]
-  public string Version { get; set; } = "";
+  public string version { get; set; } = "";
+
   [JsonPropertyName("@id")]
-  public string Id { get; set; } = "";
+  public string id { get; set; } = "";
 }

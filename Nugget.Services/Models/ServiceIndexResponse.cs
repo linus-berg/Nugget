@@ -2,10 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace Nugget.Services.Models;
 
-public class ServiceIndexResponse
-{
+public class ServiceIndexResponse {
   [JsonPropertyName("version")]
-  public string Version { get; set; } = "3.0.0";
+  public string version { get; set; } = "3.0.0";
+
   [JsonPropertyName("resources")]
-  public List<ServiceResource> Resources { get; set; } = new();
+  public List<ServiceResource> resources { get; set; } = new();
 }

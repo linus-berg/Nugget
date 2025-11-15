@@ -2,14 +2,16 @@ using System.Text.Json.Serialization;
 
 namespace Nugget.Services.Models;
 
-public class RegistrationPage
-{
+public class RegistrationPage {
   [JsonPropertyName("lower")]
-  public string Lower { get; set; } = "";
+  public string lower { get; set; } = "";
+
   [JsonPropertyName("upper")]
-  public string Upper { get; set; } = "";
+  public string upper { get; set; } = "";
+
   [JsonPropertyName("count")]
-  public int Count { get; set; }
+  public int count { get; set; }
+
   [JsonPropertyName("items")]
-  public List<RegistrationPageItem> Items { get; set; } = new();
+  public List<RegistrationPageItem> items { get; set; } = new();
 }

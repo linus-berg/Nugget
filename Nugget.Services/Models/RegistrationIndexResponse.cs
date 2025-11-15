@@ -2,10 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace Nugget.Services.Models;
 
-public class RegistrationIndexResponse
-{
+public class RegistrationIndexResponse {
   [JsonPropertyName("count")]
-  public int Count { get; set; }
+  public int count { get; set; }
+
   [JsonPropertyName("items")]
-  public List<RegistrationPage> Items { get; set; } = new();
+  public List<RegistrationPage> items { get; set; } = new();
 }

@@ -2,14 +2,16 @@ using System.Text.Json.Serialization;
 
 namespace Nugget.Services.Models;
 
-public class RegistrationCatalogEntry
-{
+public class RegistrationCatalogEntry {
   [JsonPropertyName("@id")]
-  public string Id { get; set; } = "";
+  public string id { get; set; } = "";
+
   [JsonPropertyName("version")]
-  public string Version { get; set; } = "";
+  public string version { get; set; } = "";
+
   [JsonPropertyName("description")]
-  public string Description { get; set; } = "";
+  public string description { get; set; } = "";
+
   [JsonPropertyName("packageContent")]
-  public string PackageContent { get; set; } = "";
+  public string package_content { get; set; } = "";
 }
