@@ -1,0 +1,6 @@
+@Nugget.Api_HostAddress = http://localhost:5116
+
+GET {{Nugget.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
