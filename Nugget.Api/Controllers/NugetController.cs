@@ -32,4 +32,25 @@ public class NugetController : Controller {
 
     return Results.Ok(registration);
   }
+
+  [HttpGet("/v3/search")]
+  public async Task<IResult> Search([FromQuery] string? q, [FromQuery] int skip = 0, [FromQuery] int take = 20, [FromQuery] bool prerelease = false, [FromQuery] string? semVerLevel = "1.0.0") {
+    return Results.Ok(await package_storage_service_.SearchPackagesAsync(q ?? "", skip, take, prerelease, semVerLevel ?? "1.0.0"));
+  }
+
+  [HttpPut("/v3/packages")]
+  public async Task<IResult> Push(IFormFile package) {
+    try {
+      await package_storage_service_.AddPackageAsync(package);
+      return Results.Created();
+    } catch (Exception ex) {
+      return Results.BadRequest(ex.Message);
+    }
+  }
+
+  [HttpGet("/v3/package/{id}/{version}/{filename}")]
+  public async Task<IResult> Download(string id, string version, string filename) {
+    string url = await package_storage_service_.GetDownloadUrlAsync(id, version);
+    return Results.Redirect(url);
+  }
 }

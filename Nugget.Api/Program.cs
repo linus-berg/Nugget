@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+using Minio;
 using Nugget.Services;
 
 namespace Nugget.Api;
@@ -10,7 +10,14 @@ public class Program {
     // Add services to the container.
     builder.Services.AddAuthorization();
     builder.Services.AddHttpContextAccessor();
-    builder.Services.AddDbContext<PackageDbContext>(options => options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+    
+    // Configure Minio
+    builder.Services.AddMinio(configureSource => configureSource
+        .WithEndpoint(builder.Configuration["Minio:Endpoint"])
+        .WithCredentials(builder.Configuration["Minio:AccessKey"], builder.Configuration["Minio:SecretKey"])
+        .WithSSL(builder.Configuration.GetValue<bool?>("Minio:Secure") ?? false)
+    );
+
     builder.Services.AddScoped<PackageStorageService>();
 
     // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi

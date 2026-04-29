@@ -1,42 +1,53 @@
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Nugget.Services.DatabaseModels;
+using Microsoft.Extensions.Configuration;
 using Nugget.Services.Models;
 using System.IO.Compression;
 using System.Xml.Linq;
-using Microsoft.EntityFrameworkCore;
-using NuGet.Versioning; // Import the NuGet versioning library
-
+using NuGet.Versioning;
+using Minio;
+using Minio.DataModel.Args;
+using System.Text.Json;
+using System.Text;
 
 namespace Nugget.Services;
+
 public class PackageStorageService
 {
-    private readonly string package_storage_path_;
     private readonly ILogger<PackageStorageService> logger_;
-    private readonly PackageDbContext context_; // Use the DbContext
+    private readonly IMinioClient minio_;
+    private readonly string bucket_;
 
     public PackageStorageService(
-        IHostEnvironment env, 
-        ILogger<PackageStorageService> logger, 
-        PackageDbContext context) // Inject the DbContext
+        ILogger<PackageStorageService> logger,
+        IMinioClient minio,
+        IConfiguration config)
     {
-        package_storage_path_ = Path.Combine(env.ContentRootPath, "packages");
-        Directory.CreateDirectory(package_storage_path_);
         logger_ = logger;
-        context_ = context; // Store the context
+        minio_ = minio;
+        bucket_ = config["Minio:Bucket"] ?? "nugget";
     }
 
-    // --- Core Logic: Adding a Package ---
+    private async Task EnsureBucketExistsAsync()
+    {
+        var beArgs = new BucketExistsArgs().WithBucket(bucket_);
+        bool found = await minio_.BucketExistsAsync(beArgs);
+        if (!found)
+        {
+            var mbArgs = new MakeBucketArgs().WithBucket(bucket_);
+            await minio_.MakeBucketAsync(mbArgs);
+        }
+    }
 
     public async Task AddPackageAsync(IFormFile file)
     {
-        logger_.LogInformation("Attempting to add package...");
+        await EnsureBucketExistsAsync();
+        logger_.LogInformation("Attempting to add package to Minio...");
 
         // 1. Read package metadata from the .nuspec file
         PackageMetadata metadata;
-        await using (Stream? stream = file.OpenReadStream())
-        await using (ZipArchive zip = new ZipArchive(stream, ZipArchiveMode.Read))
+        using (Stream stream = file.OpenReadStream())
+        using (ZipArchive zip = new ZipArchive(stream, ZipArchiveMode.Read, true))
         {
             ZipArchiveEntry? nuspec_entry = zip.Entries.FirstOrDefault(e => e.FullName.EndsWith(".nuspec"));
             if (nuspec_entry == null)
@@ -44,76 +55,190 @@ public class PackageStorageService
                 throw new InvalidDataException("'.nuspec' file not found in package.");
             }
 
-            await using (Stream nuspec_stream = nuspec_entry.Open())
+            using (Stream nuspec_stream = nuspec_entry.Open())
             {
                 metadata = ParseNuspec(nuspec_stream);
             }
         }
-        
-        // 2. Check if this version already exists
-        string package_id_lower = metadata.id.ToLower();
+
+        string id_lower = metadata.id.ToLower();
         string version_lower = metadata.version.ToLower();
-        
-        bool exists = await context_.package_versions
-                                    .AnyAsync(p => p.package_id == package_id_lower && p.version == version_lower);
-            
-        if (exists)
+
+        // 2. Check if this version already exists in Registration
+        var registration = await GetRegistrationFromMinioAsync(id_lower);
+        if (registration != null)
         {
-            throw new InvalidOperationException($"Package '{package_id_lower}' version '{version_lower}' already exists.");
+            bool exists = registration.items.SelectMany(p => p.items ?? new List<RegistrationPageItem>())
+                                           .Any(i => i.catalog_entry.version.ToLower() == version_lower);
+            if (exists)
+            {
+                throw new InvalidOperationException($"Package '{id_lower}' version '{version_lower}' already exists.");
+            }
         }
 
-        // 3. Save the .nupkg file to disk
-        string package_dir = Path.Combine(package_storage_path_, package_id_lower);
-        Directory.CreateDirectory(package_dir);
-        string version_dir = Path.Combine(package_dir, version_lower);
-        Directory.CreateDirectory(version_dir);
-
-        string file_path = Path.Combine(version_dir, $"{package_id_lower}.{version_lower}.nupkg");
-        await using (FileStream file_stream = new FileStream(file_path, FileMode.Create))
+        // 3. Upload .nupkg to Minio
+        string object_name = $"v3/package/{id_lower}/{version_lower}/{id_lower}.{version_lower}.nupkg";
+        using (var uploadStream = file.OpenReadStream())
         {
-            await file.CopyToAsync(file_stream);
+            var putArgs = new PutObjectArgs()
+                .WithBucket(bucket_)
+                .WithObject(object_name)
+                .WithStreamData(uploadStream)
+                .WithObjectSize(file.Length)
+                .WithContentType("application/octet-stream");
+            await minio_.PutObjectAsync(putArgs);
         }
-        logger_.LogInformation($"Saved package to: {file_path}");
 
-        // 4. Add metadata to our database
-        PackageVersion new_package_version = new PackageVersion
+        // 4. Update Registration Index
+        await UpdateRegistrationAsync(id_lower, metadata);
+
+        // 5. Update Search Index
+        await UpdateSearchIndexAsync(metadata);
+    }
+
+    private async Task UpdateRegistrationAsync(string id, PackageMetadata metadata)
+    {
+        var registration = await GetRegistrationFromMinioAsync(id) ?? new RegistrationIndexResponse
         {
-            package_id = package_id_lower,
-            version = version_lower,
-            description = metadata.description,
-            authors = metadata.authors,
-            published = DateTime.UtcNow
+            count = 0,
+            items = new List<RegistrationPage>()
         };
+
+        var page = registration.items.FirstOrDefault() ?? new RegistrationPage
+        {
+            items = new List<RegistrationPageItem>()
+        };
+
+        if (!registration.items.Contains(page))
+        {
+            registration.items.Add(page);
+        }
+
+        page.items.Add(new RegistrationPageItem
+        {
+            catalog_entry = new RegistrationCatalogEntry
+            {
+                id = metadata.id,
+                version = metadata.version,
+                description = metadata.description,
+                authors = metadata.authors,
+                package_content = "" // Will be updated on retrieval
+            }
+        });
+
+        // Re-sort versions
+        var sortedItems = page.items
+            .OrderBy(i => NuGetVersion.Parse(i.catalog_entry.version))
+            .ToList();
         
-        context_.package_versions.Add(new_package_version);
-        await context_.SaveChangesAsync();
+        page.items = sortedItems;
+        page.lower = sortedItems.First().catalog_entry.version;
+        page.upper = sortedItems.Last().catalog_entry.version;
+        page.count = sortedItems.Count;
+        registration.count = 1;
+
+        await SaveJsonToMinioAsync($"v3/registration/{id}/index.json", registration);
+    }
+
+    private async Task UpdateSearchIndexAsync(PackageMetadata metadata)
+    {
+        var searchIndex = await GetSearchIndexFromMinioAsync() ?? new SearchResponse
+        {
+            data = new List<SearchHit>(),
+            total_hits = 0
+        };
+
+        var hit = searchIndex.data.FirstOrDefault(h => h.id.ToLower() == metadata.id.ToLower());
+        if (hit == null)
+        {
+            hit = new SearchHit
+            {
+                id = metadata.id,
+                description = metadata.description,
+                authors = metadata.authors.Split(','),
+                versions = new List<SearchVersion>()
+            };
+            searchIndex.data.Add(hit);
+        }
+
+        if (!hit.versions.Any(v => v.version.ToLower() == metadata.version.ToLower()))
+        {
+            hit.versions.Add(new SearchVersion { version = metadata.version });
+            var latest = hit.versions.OrderByDescending(v => NuGetVersion.Parse(v.version)).First();
+            hit.version = latest.version;
+        }
+
+        searchIndex.total_hits = searchIndex.data.Count;
+        await SaveJsonToMinioAsync("v3/search/index.json", searchIndex);
+    }
+
+    private async Task<RegistrationIndexResponse?> GetRegistrationFromMinioAsync(string id)
+    {
+        return await GetJsonFromMinioAsync<RegistrationIndexResponse>($"v3/registration/{id}/index.json");
+    }
+
+    private async Task<SearchResponse?> GetSearchIndexFromMinioAsync()
+    {
+        return await GetJsonFromMinioAsync<SearchResponse>("v3/search/index.json");
+    }
+
+    private async Task<T?> GetJsonFromMinioAsync<T>(string objectName) where T : class
+    {
+        try
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                var getArgs = new GetObjectArgs()
+                    .WithBucket(bucket_)
+                    .WithObject(objectName)
+                    .WithCallbackStream(s => s.CopyTo(ms));
+                await minio_.GetObjectAsync(getArgs);
+                ms.Position = 0;
+                return await JsonSerializer.DeserializeAsync<T>(ms);
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private async Task SaveJsonToMinioAsync<T>(string objectName, T data)
+    {
+        string json = JsonSerializer.Serialize(data);
+        byte[] bytes = Encoding.UTF8.GetBytes(json);
+        using (MemoryStream ms = new MemoryStream(bytes))
+        {
+            var putArgs = new PutObjectArgs()
+                .WithBucket(bucket_)
+                .WithObject(objectName)
+                .WithStreamData(ms)
+                .WithObjectSize(bytes.Length)
+                .WithContentType("application/json");
+            await minio_.PutObjectAsync(putArgs);
+        }
     }
 
     private PackageMetadata ParseNuspec(Stream stream)
     {
         XDocument xml = XDocument.Load(stream);
-        XNamespace ns = xml.Root.GetDefaultNamespace();
-        XElement metadata_node = xml.Root.Elements().First(e => e.Name.LocalName == "metadata");
+        XElement? metadata_node = xml.Root?.Elements().FirstOrDefault(e => e.Name.LocalName == "metadata");
+        if (metadata_node == null)
+        {
+            throw new InvalidDataException("Invalid .nuspec: 'metadata' node not found.");
+        }
 
         return new PackageMetadata
         {
             id = metadata_node.Elements().First(e => e.Name.LocalName == "id").Value,
             version = metadata_node.Elements().First(e => e.Name.LocalName == "version").Value,
-            description = metadata_node.Elements().First(e => e.Name.LocalName == "description").Value,
+            description = metadata_node.Elements().FirstOrDefault(e => e.Name.LocalName == "description")?.Value ?? "",
             authors = metadata_node.Elements().FirstOrDefault(e => e.Name.LocalName == "authors")?.Value ?? "N/A",
         };
     }
 
-    // --- Endpoint Helpers ---
-
-    private string GetBaseUrl(HttpContext context)
-    {
-        return $"{context.Request.Scheme}://{context.Request.Host}";
-    }
-
     public ServiceIndexResponse GetServiceIndex(HttpContext context)
     {
-        // This is static, no DB call needed.
         string base_url = GetBaseUrl(context);
         return new ServiceIndexResponse
         {
@@ -127,85 +252,94 @@ public class PackageStorageService
         };
     }
 
-    public async Task<SearchResponse> SearchPackagesAsync(string query, bool prerelease)
+    private string GetBaseUrl(HttpContext context)
     {
-        // Find all packages matching the query
-        IQueryable<PackageVersion> db_query = context_.package_versions.AsNoTracking()
-                                                      .Where(p => p.package_id.Contains(query));
+        return $"{context.Request.Scheme}://{context.Request.Host}";
+    }
 
+    public async Task<SearchResponse> SearchPackagesAsync(string query, int skip, int take, bool prerelease, string semVerLevel)
+    {
+        var index = await GetSearchIndexFromMinioAsync();
+        if (index == null) return new SearchResponse { data = new List<SearchHit>(), total_hits = 0 };
+
+        var filtered = index.data
+            .Where(h => string.IsNullOrEmpty(query) || h.id.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        // 1. Filter by prerelease if needed
         if (!prerelease)
         {
-            // A simple check for prerelease. A more robust way would use NuGet.Versioning
-            db_query = db_query.Where(p => !p.version.Contains("-"));
-        }
-
-        // Group by package ID
-        List<IGrouping<string, PackageVersion>> package_groups = await db_query.GroupBy(p => p.package_id).ToListAsync();
-
-        List<SearchHit> search_hits = new List<SearchHit>();
-        foreach (IGrouping<string, PackageVersion> group in package_groups)
-        {
-            List<PackageVersion> versions = group.ToList();
-            
-            // Use NuGet.Versioning to find the latest version
-            PackageVersion latest_version = versions
-                                            .OrderByDescending(v => NuGetVersion.Parse(v.version))
-                                            .First();
-
-            search_hits.Add(new SearchHit
+            foreach (var hit in filtered)
             {
-                id = latest_version.package_id,
-                version = latest_version.version,
-                description = latest_version.description,
-                authors = latest_version.authors.Split(','),
-                versions = versions.Select(v => new SearchVersion { version = v.version, id = "" }).ToList()
-            });
+                hit.versions = hit.versions.Where(v => !NuGetVersion.Parse(v.version).IsPrerelease).ToList();
+            }
+            // Remove hits that have no stable versions left
+            filtered = filtered.Where(h => h.versions.Any()).ToList();
+            // Update 'version' to the latest stable
+            foreach (var hit in filtered)
+            {
+                hit.version = hit.versions.OrderByDescending(v => NuGetVersion.Parse(v.version)).First().version;
+            }
         }
-        
-        return new SearchResponse { data = search_hits, total_hits = search_hits.Count };
+
+        // 2. Filter by semVerLevel (2.0.0)
+        bool allowSemVer2 = NuGetVersion.Parse(semVerLevel) >= new NuGetVersion(2, 0, 0);
+        if (!allowSemVer2)
+        {
+            foreach (var hit in filtered)
+            {
+                hit.versions = hit.versions.Where(v => !NuGetVersion.Parse(v.version).IsSemVer2).ToList();
+            }
+            filtered = filtered.Where(h => h.versions.Any()).ToList();
+            foreach (var hit in filtered)
+            {
+                hit.version = hit.versions.OrderByDescending(v => NuGetVersion.Parse(v.version)).First().version;
+            }
+        }
+
+        int totalHits = filtered.Count;
+
+        // 3. Apply Pagination (Skip/Take)
+        var paged = filtered
+            .Skip(skip)
+            .Take(take)
+            .ToList();
+
+        return new SearchResponse { data = paged, total_hits = totalHits };
     }
 
     public async Task<RegistrationIndexResponse?> GetRegistrationAsync(string id, HttpContext context)
     {
-        string package_id_lower = id.ToLower();
-        List<PackageVersion> versions = await context_.package_versions.AsNoTracking()
-                                                      .Where(p => p.package_id == package_id_lower)
-                                                      .ToListAsync();
-
-        if (!versions.Any())
-        {
-            return null;
-        }
+        var registration = await GetRegistrationFromMinioAsync(id.ToLower());
+        if (registration == null) return null;
 
         string base_url = GetBaseUrl(context);
 
-        // Use NuGet.Versioning to sort and find bounds
-        var sorted_versions = versions
-            .Select(v => new { Version = NuGetVersion.Parse(v.version), Data = v })
-            .OrderBy(v => v.Version)
-            .ToList();
-        
-        RegistrationPage page = new RegistrationPage
+        foreach (var page in registration.items)
         {
-            lower = sorted_versions.First().Version.ToNormalizedString(),
-            upper = sorted_versions.Last().Version.ToNormalizedString(),
-            count = versions.Count,
-            items = sorted_versions.Select(v => new RegistrationPageItem
+            if (page.items != null)
             {
-                catalog_entry = new RegistrationCatalogEntry
+                foreach (var item in page.items)
                 {
-                    id = v.Data.package_id,
-                    version = v.Data.version,
-                    description = v.Data.description,
-                    package_content = $"{base_url}/v3/package/{v.Data.package_id}/{v.Data.version}/{v.Data.package_id}.{v.Data.version}.nupkg"
+                    if (item.catalog_entry != null)
+                    {
+                        item.catalog_entry.package_content = $"{base_url}/v3/package/{item.catalog_entry.id}/{item.catalog_entry.version}/{item.catalog_entry.id}.{item.catalog_entry.version}.nupkg";
+                    }
                 }
-            }).ToList()
-        };
+            }
+        }
 
-        return new RegistrationIndexResponse
-        {
-            count = 1,
-            items = new List<RegistrationPage> { page }
-        };
+        return registration;
+    }
+
+    public async Task<string> GetDownloadUrlAsync(string id, string version)
+    {
+        string object_name = $"v3/package/{id.ToLower()}/{version.ToLower()}/{id.ToLower()}.{version.ToLower()}.nupkg";
+        var args = new PresignedGetObjectArgs()
+            .WithBucket(bucket_)
+            .WithObject(object_name)
+            .WithExpiry(3600);
+        
+        return await minio_.PresignedGetObjectAsync(args);
     }
 }

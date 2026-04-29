@@ -10,6 +10,8 @@ public class RegistrationCatalogEntry
   public string version { get; set; } = "";
   [JsonPropertyName("description")]
   public string description { get; set; } = "";
+  [JsonPropertyName("authors")]
+  public string authors { get; set; } = "";
   [JsonPropertyName("packageContent")]
   public string package_content { get; set; } = "";
 }
