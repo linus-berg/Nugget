@@ -48,8 +48,22 @@ public class NugetController : Controller {
     }
   }
 
+  [HttpGet("/v3/package/{id}/index.json")]
+  public async Task<IResult> GetVersions(string id) {
+    PackageVersionsResponse? versions = await package_storage_service_.GetPackageVersionsAsync(id);
+    if (versions == null) {
+      return Results.NotFound();
+    }
+    return Results.Ok(versions);
+  }
+
   [HttpGet("/v3/package/{id}/{version}/{filename}")]
   public async Task<IResult> Download(string id, string version, string filename) {
+    if (filename.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase)) {
+      string nuspecUrl = await package_storage_service_.GetNuspecUrlAsync(id, version);
+      return Results.Redirect(nuspecUrl);
+    }
+
     string url = await package_storage_service_.GetDownloadUrlAsync(id, version);
     return Results.Redirect(url);
   }

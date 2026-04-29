@@ -77,23 +77,68 @@ public class PackageStorageService
         }
 
         // 3. Upload .nupkg to Minio
-        string object_name = $"v3/package/{id_lower}/{version_lower}/{id_lower}.{version_lower}.nupkg";
+        string nupkg_object = $"v3/package/{id_lower}/{version_lower}/{id_lower}.{version_lower}.nupkg";
         using (var uploadStream = file.OpenReadStream())
         {
             var putArgs = new PutObjectArgs()
                 .WithBucket(bucket_)
-                .WithObject(object_name)
+                .WithObject(nupkg_object)
                 .WithStreamData(uploadStream)
                 .WithObjectSize(file.Length)
                 .WithContentType("application/octet-stream");
             await minio_.PutObjectAsync(putArgs);
         }
 
-        // 4. Update Registration Index
+        // 4. Upload .nuspec to Minio
+        string nuspec_object = $"v3/package/{id_lower}/{version_lower}/{id_lower}.nuspec";
+        using (Stream stream = file.OpenReadStream())
+        using (ZipArchive zip = new ZipArchive(stream, ZipArchiveMode.Read))
+        {
+            ZipArchiveEntry? nuspec_entry = zip.Entries.FirstOrDefault(e => e.FullName.EndsWith(".nuspec"));
+            if (nuspec_entry != null)
+            {
+                using (Stream nuspec_stream = nuspec_entry.Open())
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    await nuspec_stream.CopyToAsync(ms);
+                    ms.Position = 0;
+                    var putArgs = new PutObjectArgs()
+                        .WithBucket(bucket_)
+                        .WithObject(nuspec_object)
+                        .WithStreamData(ms)
+                        .WithObjectSize(ms.Length)
+                        .WithContentType("text/xml");
+                    await minio_.PutObjectAsync(putArgs);
+                }
+            }
+        }
+
+        // 5. Update Registration Index
         await UpdateRegistrationAsync(id_lower, metadata);
 
-        // 5. Update Search Index
+        // 6. Update Search Index
         await UpdateSearchIndexAsync(metadata);
+
+        // 7. Update Package Versions Index (Flat Container index.json)
+        await UpdatePackageVersionsIndexAsync(id_lower, metadata.version);
+    }
+
+    private async Task UpdatePackageVersionsIndexAsync(string id, string version)
+    {
+        string object_name = $"v3/package/{id}/index.json";
+        var response = await GetJsonFromMinioAsync<PackageVersionsResponse>(object_name) ?? new PackageVersionsResponse();
+        
+        if (!response.versions.Any(v => v.ToLower() == version.ToLower()))
+        {
+            response.versions.Add(version);
+            response.versions = response.versions
+                .Select(v => NuGetVersion.Parse(v))
+                .OrderBy(v => v)
+                .Select(v => v.ToNormalizedString())
+                .ToList();
+            
+            await SaveJsonToMinioAsync(object_name, response);
+        }
     }
 
     private async Task UpdateRegistrationAsync(string id, PackageMetadata metadata)
@@ -335,6 +380,23 @@ public class PackageStorageService
     public async Task<string> GetDownloadUrlAsync(string id, string version)
     {
         string object_name = $"v3/package/{id.ToLower()}/{version.ToLower()}/{id.ToLower()}.{version.ToLower()}.nupkg";
+        var args = new PresignedGetObjectArgs()
+            .WithBucket(bucket_)
+            .WithObject(object_name)
+            .WithExpiry(3600);
+        
+        return await minio_.PresignedGetObjectAsync(args);
+    }
+
+    public async Task<PackageVersionsResponse?> GetPackageVersionsAsync(string id)
+    {
+        string object_name = $"v3/package/{id.ToLower()}/index.json";
+        return await GetJsonFromMinioAsync<PackageVersionsResponse>(object_name);
+    }
+
+    public async Task<string> GetNuspecUrlAsync(string id, string version)
+    {
+        string object_name = $"v3/package/{id.ToLower()}/{version.ToLower()}/{id.ToLower()}.nuspec";
         var args = new PresignedGetObjectArgs()
             .WithBucket(bucket_)
             .WithObject(object_name)

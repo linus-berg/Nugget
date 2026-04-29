@@ -58,8 +58,10 @@ push_package() {
 }
 
 # 5. Execute pushes
-push_package "$SAMPLE_PACKAGE" || exit 1
-push_package "$POPULAR_PACKAGE" || exit 1
+#push_package "$SAMPLE_PACKAGE" || exit 1
+#push_package "$POPULAR_PACKAGE" || exit 1
+#push_package nifikit.0.0.3.nupkg
+push_package nifikit.0.0.2.nupkg
 
 # 6. Cleanup
 rm nuget.config
