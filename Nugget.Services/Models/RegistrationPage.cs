@@ -4,6 +4,8 @@ namespace Nugget.Services.Models;
 
 public class RegistrationPage
 {
+  [JsonPropertyName("@id")]
+  public string id { get; set; } = "";
   [JsonPropertyName("lower")]
   public string lower { get; set; } = "";
   [JsonPropertyName("upper")]

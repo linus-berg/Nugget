@@ -35,7 +35,7 @@ public class NugetController : Controller {
 
   [HttpGet("/v3/search")]
   public async Task<IResult> Search([FromQuery] string? q, [FromQuery] int skip = 0, [FromQuery] int take = 20, [FromQuery] bool prerelease = false, [FromQuery] string? semVerLevel = "1.0.0") {
-    return Results.Ok(await package_storage_service_.SearchPackagesAsync(q ?? "", skip, take, prerelease, semVerLevel ?? "1.0.0"));
+    return Results.Ok(await package_storage_service_.SearchPackagesAsync(q ?? "", skip, take, prerelease, semVerLevel ?? "1.0.0", HttpContext));
   }
 
   [HttpPut("/v3/packages")]

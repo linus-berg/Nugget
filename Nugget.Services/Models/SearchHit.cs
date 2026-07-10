@@ -4,6 +4,8 @@ namespace Nugget.Services.Models;
 
 public class SearchHit
 {
+  [JsonPropertyName("@id")]
+  public string registration_id { get; set; } = "";
   [JsonPropertyName("id")]
   public string id { get; set; } = "";
   [JsonPropertyName("version")]

@@ -173,6 +173,10 @@ public class PackageStorageService
 
         // Re-sort versions
         var sortedItems = page.items
+            .Select(i => {
+                i.catalog_entry.version = NuGetVersion.Parse(i.catalog_entry.version).ToNormalizedString();
+                return i;
+            })
             .OrderBy(i => NuGetVersion.Parse(i.catalog_entry.version))
             .ToList();
         
@@ -206,9 +210,10 @@ public class PackageStorageService
             searchIndex.data.Add(hit);
         }
 
-        if (!hit.versions.Any(v => v.version.ToLower() == metadata.version.ToLower()))
+        string normalizedVersion = NuGetVersion.Parse(metadata.version).ToNormalizedString();
+        if (!hit.versions.Any(v => NuGetVersion.Parse(v.version).ToNormalizedString() == normalizedVersion))
         {
-            hit.versions.Add(new SearchVersion { version = metadata.version });
+            hit.versions.Add(new SearchVersion { version = normalizedVersion });
             var latest = hit.versions.OrderByDescending(v => NuGetVersion.Parse(v.version)).First();
             hit.version = latest.version;
         }
@@ -302,7 +307,7 @@ public class PackageStorageService
         return $"{context.Request.Scheme}://{context.Request.Host}";
     }
 
-    public async Task<SearchResponse> SearchPackagesAsync(string query, int skip, int take, bool prerelease, string semVerLevel)
+    public async Task<SearchResponse> SearchPackagesAsync(string query, int skip, int take, bool prerelease, string semVerLevel, HttpContext context)
     {
         var index = await GetSearchIndexFromMinioAsync();
         if (index == null) return new SearchResponse { data = new List<SearchHit>(), total_hits = 0 };
@@ -350,6 +355,16 @@ public class PackageStorageService
             .Take(take)
             .ToList();
 
+        string base_url = GetBaseUrl(context);
+        foreach (var hit in paged)
+        {
+            hit.registration_id = $"{base_url}/v3/registration/{hit.id.ToLower()}/index.json";
+            foreach (var v in hit.versions)
+            {
+                v.id = $"{base_url}/v3/registration/{hit.id.ToLower()}/index.json";
+            }
+        }
+
         return new SearchResponse { data = paged, total_hits = totalHits };
     }
 
@@ -359,16 +374,22 @@ public class PackageStorageService
         if (registration == null) return null;
 
         string base_url = GetBaseUrl(context);
+        string reg_url = $"{base_url}/v3/registration/{id.ToLower()}/index.json";
 
         foreach (var page in registration.items)
         {
+            page.id = reg_url; 
             if (page.items != null)
             {
                 foreach (var item in page.items)
                 {
                     if (item.catalog_entry != null)
                     {
-                        item.catalog_entry.package_content = $"{base_url}/v3/package/{item.catalog_entry.id}/{item.catalog_entry.version}/{item.catalog_entry.id}.{item.catalog_entry.version}.nupkg";
+                        string normalizedVersion = NuGetVersion.Parse(item.catalog_entry.version).ToNormalizedString();
+                        item.id = $"{reg_url}#version/{normalizedVersion}";
+                        item.catalog_entry.id = item.catalog_entry.id; 
+                        item.catalog_entry.package_content = $"{base_url}/v3/package/{item.catalog_entry.id}/{normalizedVersion}/{item.catalog_entry.id}.{normalizedVersion}.nupkg";
+                        item.package_content = item.catalog_entry.package_content;
                     }
                 }
             }
