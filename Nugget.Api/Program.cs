@@ -30,7 +30,9 @@ public class Program {
       app.MapOpenApi();
     }
 
-    app.UseHttpsRedirection();
+    // Don't force HTTPS redirection — NuGet clients often use HTTP for private feeds
+    // and the test scripts use http://localhost. HTTPS should be handled by a reverse proxy.
+    // app.UseHttpsRedirection();
 
     app.UseAuthorization();
     app.MapControllers();

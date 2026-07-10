@@ -4,7 +4,7 @@
 REGISTRY_URL="http://localhost:5116"
 SAMPLE_PACKAGE="SamplePackage.1.0.0.nupkg"
 POPULAR_PACKAGE_ID="Newtonsoft.Json"
-POPULAR_PACKAGE_VERSION="13.0.3"
+POPULAR_PACKAGE_VERSION="13.0.1"
 POPULAR_PACKAGE="$POPULAR_PACKAGE_ID.$POPULAR_PACKAGE_VERSION.nupkg"
 
 # 1. Ensure SamplePackage exists
@@ -59,8 +59,8 @@ push_package() {
 
 # 5. Execute pushes
 #push_package "$SAMPLE_PACKAGE" || exit 1
-#push_package "$POPULAR_PACKAGE" || exit 1
-push_package nifikit.0.0.3.nupkg
+push_package "$POPULAR_PACKAGE" || exit 1
+#push_package nifikit.0.0.3.nupkg
 #push_package nifikit.0.0.2.nupkg
 
 # 6. Cleanup

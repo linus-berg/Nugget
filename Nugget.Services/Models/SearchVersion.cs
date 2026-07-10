@@ -8,4 +8,6 @@ public class SearchVersion
   public string version { get; set; } = "";
   [JsonPropertyName("@id")]
   public string id { get; set; } = "";
+  [JsonPropertyName("downloads")]
+  public int downloads { get; set; } = 0;
 }

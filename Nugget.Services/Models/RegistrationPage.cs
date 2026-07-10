@@ -6,6 +6,8 @@ public class RegistrationPage
 {
   [JsonPropertyName("@id")]
   public string id { get; set; } = "";
+  [JsonPropertyName("@type")]
+  public string type { get; set; } = "catalog:CatalogPage";
   [JsonPropertyName("lower")]
   public string lower { get; set; } = "";
   [JsonPropertyName("upper")]

@@ -6,6 +6,8 @@ public class RegistrationPageItem
 {
   [JsonPropertyName("@id")]
   public string id { get; set; } = "";
+  [JsonPropertyName("@type")]
+  public string type { get; set; } = "Package";
   [JsonPropertyName("packageContent")]
   public string package_content { get; set; } = "";
   [JsonPropertyName("catalogEntry")]
